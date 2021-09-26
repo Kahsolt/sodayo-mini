@@ -13,10 +13,11 @@
     - rename `quota_init.txt-skel` to `quota_init.txt`, setup your quota rules
     - rename `settings.py-skel` to `settings.py`, make your setting
     - run server `python3 sodayo.py`
-    - point your browser according to `SERVER_SOCKET`
+    - point your browser according to `API_BASE`
   - cmdline client
+    - run `python3 sdy.py --sync` force sync data from all hosts
+    - run `python3 sdy.py --runtime` show latest runtime info
     - run `python3 sdy.py --quota <@all|@me|username>` query quota remnants
-    - run `python3 sdy.py --realloc 3` try reallocating `3` GPUs
 
 
 #### requirements

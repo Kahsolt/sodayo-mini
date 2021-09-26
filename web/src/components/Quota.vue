@@ -56,13 +56,6 @@ export default {
             let r = res.data
             if (r.ok) {
               this.quota_info = r.data
-
-              let overquota_users = [ ]
-              for (let user in r.data)
-                if (r.data[user] <= 0)
-                  overquota_users.push(user)
-              if (overquota_users.length > 0)
-                bus.$emit('overquota_users', overquota_users)
             } else {
               bus.$emit('messagebox', r.reason, false)
               let msg = '[quota] error: ' + r.reason

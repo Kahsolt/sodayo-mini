@@ -3,7 +3,6 @@
 # Create Time: 2021/09/24 
 
 import os
-from json import dumps
 from pwd import getpwuid
 from argparse import ArgumentParser
 
@@ -13,6 +12,29 @@ from settings import *
 
 
 __version__ = '0.1'     # 2021/09/26
+
+
+def sync():
+  try:
+    d = R.put(f'{API_BASE}/sync', timeout=30).json()
+    if d["ok"]: print('ok')
+    else:      print(f'[error] {d["reason"]}')
+  except Exception as e:
+    print(e)
+
+
+def runtime():
+  try:
+    d = R.get(f'{API_BASE}/runtime').json()
+    if d["ok"]:
+      for hostname, gpu_rt in d["data"].items():
+        print(f'<{hostname}>')
+        for gpu_id, users in gpu_rt.items():
+          print(f'  [{gpu_id}]: {",".join(sorted(users))}')
+    else:
+      print(f'[error] {d["reason"]}')
+  except Exception as e:
+    print(e)
 
 
 def quota(username=None):
@@ -29,11 +51,15 @@ def quota(username=None):
 
 if __name__ == '__main__':
   parser = ArgumentParser()
-  parser.add_argument('--quota', type=str, default='@me', help='query quota, eg. --quota @me/@all/somebody')
+  parser.add_argument('--sync',    action='store_true',   help='force sync data from all hosts')
+  parser.add_argument('--runtime', action='store_true',   help='show latest runtime info')
+  parser.add_argument('--quota', type=str, default='@me', help='query quota remnants, eg. --quota @me/@all/somebody')
   args = parser.parse_args()
 
   username = getpwuid(os.getuid()).pw_name
-  if args.quota:
+  if args.sync: sync()
+  elif args.runtime: runtime()
+  elif args.quota:
     if args.quota == '@all': quota()
     elif args.quota == '@me': quota(username)
     else: quota(args.quota)

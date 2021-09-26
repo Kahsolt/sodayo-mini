@@ -9,31 +9,35 @@ import os
 # str, default: rootpath of sodayo
 BASE_PATH = os.path.dirname(os.path.abspath(__name__))
 
-# sodayo-web 编译产出的根相对路径, NOTE: HTTP服务启动后会切换到该目录下运行
-# str: default: 'web/dist'
-WEB_CHROOT_PATH = 'web/dist'
-
-# HTTP服务所在url位置
-# str, default: 'http://127.0.0.1:2333'
-API_BASE = 'http://127.0.0.1:2333'
-
-# 单次请求最多申请的GPU数量
-# int, default: 8
-MAX_ALLOC_COUNT = 8
-
-# HTTP服务所在socket位置
+# HTTP服务绑定监听的socket位置
 # ('host/ip':str, port:int), default: ('127.0.0.1', 2333)
-SERVER_SOCKET = ('127.0.0.1', 2333)
+BIND_SOCKET = ('127.0.0.1', 2333)
 
-# 受管理的服务器节点们的位置 (for ssh)
+# 受管理的服务器节点们的socket位置 (for ssh)
 # ['host(ip)':str, port:int], default: [ ('127.0.0.1', 22) ]
 TRACKED_SOCKETS = [
   ('127.0.0.1', 22),
 ]
 
-# 检查GPU进程的时间间隔
+# HTTP服务所在url位置
+# str, default: 'http://127.0.0.1:2333'
+API_BASE = 'http://127.0.0.1:2333'
+
+# 客户端主动要求sync的最短时间间隔，NOTE: 防止API滥用
+# int (in seconds), default: 10
+SYNC_DEADTIME = 10
+
+# 单次请求最多申请的GPU数量
+# int, default: 8
+MAX_REALLOC_COUNT = 8
+
+# sodayo-web 编译产出的根相对路径, NOTE: sodayo启动后会切换到该目录下运行HTTP服务
+# str: default: 'web/dist'
+WEB_CHROOT_PATH = 'web/dist'
+
+# 服务端定时自动遍历检查所有主机的时间间隔，也是dequota的自然周期
 # int (in minutes), default: 10
-CHECK_INTERVAL = 10
+SYNC_INTERVAL = 10
 
 # 强制保存一次 quota历史记录 的时间间隔
 # int (in minutes), default: 60
@@ -53,4 +57,4 @@ LOG_FILE = 'access.log'
 
 # 启用 控制台回显日志
 # bool, default: False
-DEBUG_MODE = False
+DEBUG_MODE = True

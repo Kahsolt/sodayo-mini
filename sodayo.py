@@ -3,8 +3,8 @@
 # Create Time: 2021/09/23 
 
 import os
-import re
 import logging
+from re import compile as Regex
 from shutil import copy2
 from threading import Timer, RLock
 from time import time
@@ -12,7 +12,7 @@ from json import loads
 from datetime import datetime
 from random import sample, shuffle
 from collections import defaultdict
-from typing import Union
+from typing import DefaultDict, Union
 from traceback import format_exc
 from pwd import getpwuid
 
@@ -27,7 +27,7 @@ from settings import *
 __version__ = '0.1'     # 2021/09/26
 
 
-# NOTE: main functional code lies in `GpuMonitor.check_task()` and `GpuMonitor.alloc_gpu()`
+# NOTE: main functional code lies in `GpuMonitor.dequota_task()` and `GpuMonitor.alloc_gpu()`
 
 ##############################################################################
 # globals
@@ -84,10 +84,12 @@ class RESPONSE:
     if reason is not None: r['reason'] = reason
     return jsonify(r)
 
-  ok = lambda data: RESPONSE.make(ok=True, data=data)
-  fail = lambda reason: RESPONSE.make(ok=False, reason=reason)
+  ok = lambda data=None: RESPONSE.make(ok=True, data=data)
+  fail = lambda reason='': RESPONSE.make(ok=False, reason=reason)
 
 min_to_sec = lambda x: x * 60
+
+now_ts = lambda: datetime.timestamp(datetime.now())
 
 
 ##############################################################################
@@ -121,7 +123,7 @@ def with_lock(lock:RLock):
 
 class QuotaTracker:
 
-  WHITESPACE_REGEX = re.compile(r'\s+')
+  WHITESPACE_REGEX = Regex(r'\s+')
 
   quota_info = { }    # 'username': time(int)
   
@@ -191,7 +193,6 @@ class QuotaTracker:
 
   def dump_task(self):
     # reset timer
-    self.dump_timer.cancel()
     self.dump_timer = Timer(min_to_sec(DUMP_INTERVAL), self.dump_task)
     self.dump_timer.start()
 
@@ -204,13 +205,16 @@ class GpuMonitor:
     # quota tracker
     self.quota = QuotaTracker()
 
+    # last sync timestamp
+    self.last_sync_ts = now_ts()
+
     # ssh configs
     self.ssh = paramiko.SSHClient()
     self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     self.username = getpwuid(os.getuid()).pw_name
     self.pkey = paramiko.RSAKey.from_private_key_file(os.path.join(os.path.expanduser('~'), '.ssh/id_rsa'))
 
-    self.check_timer = Timer(0, self.check_task)
+    self.check_timer = Timer(0, self.dequota_task)
 
   def start(self):
     self.quota.start()
@@ -221,17 +225,13 @@ class GpuMonitor:
     self.quota.stop()
 
   @with_lock(lock)
-  @perf_counter       # ~ 6s
-  def check_task(self):
-    logger.info('[check_task]')
+  def sync(self, collect_quota=False) -> Union[DefaultDict, bool]:
+    now_ts_freeze = now_ts()
+    if not collect_quota and (now_ts_freeze - self.last_sync_ts <= SYNC_DEADTIME): return False
+    self.last_sync_ts = now_ts_freeze
 
-    # reset timer
-    self.check_timer.cancel()
-    self.check_timer = Timer(min_to_sec(CHECK_INTERVAL), self.check_task)
-    self.check_timer.start()
-
-    # do work
-    quota_portion = defaultdict(int)      # {'username': gpu_use_portion:int}
+    if collect_quota:
+      quota_portion = defaultdict(int)     # {'username': portion(int)}
     for host, port in TRACKED_SOCKETS:      # foreach host
       logger.info(f'  >> query ({host}, {port})')
 
@@ -255,9 +255,10 @@ class GpuMonitor:
           gpu_id, procs = gpu['index'], gpu['processes']
           gpu_rt[gpu_id] = {p['username'] for p in procs}
 
-          for username in gpu_rt[gpu_id]:
-            if username == 'root': continue
-            quota_portion[username] += 1
+          if collect_quota:
+            for username in gpu_rt[gpu_id]:
+              if username == 'root': continue
+              quota_portion[username] += 1
 
       except Exception as e:
         logger.error(f'  << failed for ({host}, {port})')
@@ -265,10 +266,24 @@ class GpuMonitor:
       finally:
         self.ssh.close()
 
+    if collect_quota: return quota_portion
+    else: return True
+
+  @perf_counter       # ~ 6s
+  def dequota_task(self):
+    logger.info('[dequota_task]')
+
+    # reset timer
+    self.check_timer = Timer(min_to_sec(SYNC_INTERVAL), self.dequota_task)
+    self.check_timer.start()
+
+    # do work
+    quota_portion = self.sync(collect_quota=True)
     if quota_portion:
-      logger.info('[dequota]')          # NOTE: we move this out of `QuotaTracker.dequota` for pretty printing :)
+      # NOTE: we move this log out of `QuotaTracker.dequota` for pretty printing :)
+      logger.info('[dequota]')
       for username, portion in quota_portion.items():
-        self.quota.dequota(username, CHECK_INTERVAL * portion)
+        self.quota.dequota(username, SYNC_INTERVAL * portion)
 
   @with_lock(lock)
   def alloc_gpu(self, username, password, gpu_count) -> Union[str, list]:
@@ -325,10 +340,8 @@ class GpuMonitor:
             if gpu_id not in to_kill_gpu_ids: continue
             for proc in gpu['processes']:
               pid = proc['pid']
-              username = proc['username']
-              cmd = proc['command']
-              
-              logger.info(f'  >> [{username}] {pid}: {cmd}')
+              logger.info(f'  >> [{proc["username"]}] {pid}: {proc["command"]}')
+
               sh_cmd = f'kill -9 {pid}'
               stdin, stdout, stderr = self.ssh.exec_command(sh_cmd, timeout=15)
               r = stdout.read()
@@ -358,14 +371,13 @@ def root():
   try:    return render_template('index.html')
   except: return 'Web service not available :('
 
-@app.route('/refresh', methods=['PUT'])
-def refresh():
-  monitor.check_task()
-  return RESPONSE.ok({})
+@app.route('/sync', methods=['PUT'])
+def sync():
+  r = monitor.sync()
+  return r and RESPONSE.ok() or RESPONSE.fail('server busy, retry later')
 
 @app.route('/runtime', methods=['GET'])
 def runtime():
-  # convert JSON serializable
   d = {k: {i: list(u) for i, u in v.items()} for k, v in gpu_runtime.items()}
   return RESPONSE.ok(d)
 
@@ -411,8 +423,8 @@ if __name__ == '__main__':
   
   try:
     monitor.start()
-    host, port = SERVER_SOCKET
-    app.run(host='0.0.0.0', port=port, debug=False)
+    host, port = BIND_SOCKET
+    app.run(host=host, port=port, debug=False)
   except KeyboardInterrupt:
     logger.info('exit by Ctrl+C')
   except Exception:

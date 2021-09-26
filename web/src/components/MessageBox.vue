@@ -1,10 +1,10 @@
 <template>
-  <div class="text-center">
-    <v-snackbar v-model="is_show" :timeout="timeout" :color="color">
+  <div large class="text-center">
+    <v-snackbar large v-model="is_show" :timeout="timeout" :color="color">
       {{ message }}
 
       <template v-slot:action="{ attrs }">
-        <v-btn text color="blue" v-bind="attrs" @click="is_show = false"> x </v-btn>
+        <v-btn icon color="white--text" v-bind="attrs" @click="is_show = false"> x </v-btn>
       </template>
     </v-snackbar>
   </div>

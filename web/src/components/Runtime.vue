@@ -30,7 +30,6 @@ export default {
   data() {
     return {
       runtime_info: [ ],
-      overquota_users: [ ],
       tv_runtime_info: [ ],
       tv_root_ids: [ ],
     }
@@ -51,8 +50,7 @@ export default {
           children: [ ],
         }
         for (let gpu_id in data[hostname]) {
-          let users = data[hostname][gpu_id]
-          let line = '[' + gpu_id + ']: '  + users.sort()
+          let line = '[' + gpu_id + ']: ' + data[hostname][gpu_id].sort()
           d.children.push({name: line})
         }
         this.tv_runtime_info.push(d)
@@ -87,10 +85,6 @@ export default {
     this.refresh()
     setInterval(this.refresh, 1000 * hp.REFRESH_INTERVAL)
 
-    bus.$on('overquota_users', (val) => {
-      this.overquota_users = val
-      this.redraw()
-    })
     bus.$on('refresh', () => {
       this.refresh()
     })
@@ -100,6 +94,6 @@ export default {
 
 <style>
 .v-treeview--dense .v-treeview-node__root {
-  min-height: 40px;
+  min-height: 32px !important;
 }
 </style>

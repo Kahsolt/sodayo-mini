@@ -32,7 +32,7 @@
             <span class="text-center">
               {{ gpu_count }}
             </span>
-            <v-btn icon color="primary" @click="gpu_count < MAX_ALLOC_COUNT ? gpu_count++ : gpu_count">
+            <v-btn icon color="primary" @click="gpu_count < MAX_REALLOC_COUNT ? gpu_count++ : gpu_count">
               <v-icon>mdi-plus-circle</v-icon>
             </v-btn>
           </span>
@@ -58,7 +58,7 @@ export default {
   props: { width: Number },
   data() {
     return {
-      MAX_ALLOC_COUNT: hp.MAX_ALLOC_COUNT,
+      MAX_REALLOC_COUNT: hp.MAX_REALLOC_COUNT,
 
       loader: null,
       is_submit: false,

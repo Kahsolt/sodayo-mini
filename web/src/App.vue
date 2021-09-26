@@ -20,16 +20,16 @@
               <v-icon>mdi-sync</v-icon>
             </v-btn>
           </template>
-          <span>forced server sync</span>
+          <span>instant forced-sync</span>
         </v-tooltip>
 
         <v-tooltip bottom>
           <template v-slot:activator="{ on, attrs }">
-            <v-btn icon large color="green" v-bind="attrs" v-on="on" :loading="is_refresh" @click="refresh()">
+            <v-btn icon large color="green lighten-2" v-bind="attrs" v-on="on" :loading="is_refresh" @click="refresh()">
               <v-icon>mdi-reload</v-icon>
             </v-btn>
           </template>
-          <span>instant refresh</span>
+          <span>refresh by latest auto-sync</span>
         </v-tooltip>
       </div>
     </v-app-bar>
@@ -61,6 +61,7 @@ import Quota from './components/Quota.vue';
 import Runtime from './components/Runtime.vue';
 import Realloc from './components/Realloc.vue';
 import bus from './plugins/bus'
+import hp from './plugins/settings'
 
 export default {
   name: 'App',
@@ -93,7 +94,7 @@ export default {
 
       bus.$emit('set_overlay', true)
       this.axios
-          .put('/refresh')
+          .put('/sync')
           .then(res => {
             let r = res.data
             if (r.ok) {
@@ -101,7 +102,7 @@ export default {
               bus.$emit('messagebox', 'ok', true)
             } else {
               bus.$emit('messagebox', r.reason, false)
-              console.log('[refresh] error: ' + r.reason)
+              console.log('[sync] error: ' + r.reason)
             }
           })
           .catch(err => console.log(err))
@@ -119,7 +120,7 @@ export default {
     loader () {
       const l = this.loader
       this[l] = !this[l]
-      setTimeout(() => (this[l] = false), 7000)
+      setTimeout(() => (this[l] = false), 1000 * hp.SYNC_DEADTIME)
       this.loader = null
     },
   },
