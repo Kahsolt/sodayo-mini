@@ -1,0 +1,14 @@
+# project
+.vscode
+
+# python bytecode
+__pycache__/
+
+# localized sensitive data
+quota_init.txt
+settings.py
+data/
+
+# logs
+log/
+*.log

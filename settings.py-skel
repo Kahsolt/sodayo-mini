@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+# Author: Armit
+# Create Time: 2021/09/26
+
+import os
+
+# 所有PATH相关变量的根目录
+# str, default: rootpath of sodayo
+BASE_PATH = os.path.dirname(os.path.abspath(__name__))
+
+# sodayo-web 编译产出的根相对路径, HTTP服务启动后会切换到该目录下运行
+# str: default: 'web/dist'
+WEB_CHROOT_PATH = 'web/dist'
+
+# HTTP服务所在url位置
+# str, default: 'http://127.0.0.1:2333'
+API_BASE = 'http://127.0.0.1:2333'
+
+# HTTP服务所在socket位置
+# ('host/ip':str, port:int), default: ('127.0.0.1', 2333)
+SERVER_SOCKET = ('127.0.0.1', 2333)
+
+# 受管理的服务器节点们的位置 (for ssh)
+# ['host(ip)':str, port:int], default: [ ('127.0.0.1', 22) ]
+TRACKED_SOCKETS = [
+  ('127.0.0.1', 22),
+]
+
+# 检查GPU进程的时间间隔
+# int (in minutes), default: 10
+CHECK_INTERVAL = 10
+
+# 强制保存一次 quota历史记录 的时间间隔
+# int (in minutes), default: 60
+DUMP_INTERVAL = 60
+
+# 初始配额规则quota_init 所在文件路径
+# str (relpath or abspath), default: 'quota_init.txt'
+QUOTA_INIT_FILE = 'quota_init.txt'
+
+# quota历史记录 文件存放的目录，文件名形如 'quota_2021-09.txt'
+# str (relpath or abspath), default: 'data'
+DATA_PATH = 'data'
+
+# 日志文件名, None表示禁用日志
+# str (relpath or abspath), default: 'access.log'
+LOG_FILE = 'access.log'
+
+# 启用 控制台回显日志
+# bool, default: False
+DEBUG_MODE = False
