@@ -1,7 +1,37 @@
 <template>
   <v-app>
+    <v-overlay :value="is_overlay" class="text-center">
+      <v-progress-circular
+        indeterminate
+        color="red"
+        :size="72"
+        :width="10"
+      ></v-progress-circular>
+    </v-overlay>
+
+    <message-box></message-box>
+
     <v-app-bar app color="info" elevation="8" class="white--text">
       <h3 class="ma-4">Kimi mo Sodayo (mini)</h3>
+      <div class="float-right">
+        <v-tooltip bottom>
+          <template v-slot:activator="{ on, attrs }">
+            <v-btn icon large color="red" v-bind="attrs" v-on="on" :loading="is_sync" @click="sync()">
+              <v-icon>mdi-sync</v-icon>
+            </v-btn>
+          </template>
+          <span>forced server sync</span>
+        </v-tooltip>
+
+        <v-tooltip bottom>
+          <template v-slot:activator="{ on, attrs }">
+            <v-btn icon large color="green" v-bind="attrs" v-on="on" :loading="is_refresh" @click="refresh()">
+              <v-icon>mdi-reload</v-icon>
+            </v-btn>
+          </template>
+          <span>instant refresh</span>
+        </v-tooltip>
+      </div>
     </v-app-bar>
 
     <v-divider inset></v-divider>
@@ -26,16 +56,72 @@
 </template>
 
 <script>
+import MessageBox from './components/MessageBox.vue';
 import Quota from './components/Quota.vue';
-import Realloc from './components/Realloc.vue';
 import Runtime from './components/Runtime.vue';
+import Realloc from './components/Realloc.vue';
+import bus from './plugins/bus'
 
 export default {
   name: 'App',
   components: {
+    MessageBox,
     Quota,
-    Realloc,
     Runtime,
+    Realloc,
+  },
+  data() {
+    return {
+      loader: null,
+      is_sync: false,
+      is_refresh: false,
+
+      is_overlay: false,
+    }
+  },
+  methods: {
+    refresh() {
+      console.log('[App.refresh]')
+      this.loader = 'is_refresh'
+
+      bus.$emit('refresh')
+      bus.$emit('messagebox', 'ok', true)
+    },
+    sync() {
+      console.log('[App.sync]')
+      this.loader = 'is_sync'
+
+      bus.$emit('set_overlay', true)
+      this.axios
+          .put('/refresh')
+          .then(res => {
+            let r = res.data
+            if (r.ok) {
+              bus.$emit('refresh')
+              bus.$emit('messagebox', 'ok', true)
+            } else {
+              bus.$emit('messagebox', r.reason, false)
+              console.log('[refresh] error: ' + r.reason)
+            }
+          })
+          .catch(err => console.log(err))
+          .finally(() => {
+            bus.$emit('set_overlay', false)
+          })
+    },
+  },
+  beforeMount() {
+    bus.$on('set_overlay', (val) => {
+      this.is_overlay = val
+    })
+  },
+  watch: {
+    loader () {
+      const l = this.loader
+      this[l] = !this[l]
+      setTimeout(() => (this[l] = false), 7000)
+      this.loader = null
+    },
   },
 };
 </script>

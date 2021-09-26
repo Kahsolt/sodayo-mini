@@ -37,6 +37,8 @@ export default {
   },
   methods: {
     redraw() {
+      console.log('[Runtime.redraw]')
+
       this.tv_root_ids.length = 0
       this.tv_runtime_info.length = 0
       let id = 1
@@ -57,25 +59,28 @@ export default {
       }
     },
     refresh() {
-      this.axios.get('/runtime')
-                .then(res => {
-                  let r = res.data
-                  if (r.ok) {
-                    this.runtime_info = r.data
-                    this.redraw()
+      console.log('[Runtime.refresh]')
 
-                    let idle_gpu_count = 0
-                    for (let hostname in r.data)
-                      for (let gpu_id in r.data[hostname])
-                        if (r.data[hostname][gpu_id].length == 0)
-                          idle_gpu_count++
-                    bus.$emit('idle_gpu_count', idle_gpu_count)
-                  } else {
-                    let msg = '[runtime] error: ' + r.reason
-                    console.log(msg)
-                  }
-                })
-                .catch(err => console.log(err))
+      this.axios
+          .get('/runtime')
+          .then(res => {
+            let r = res.data
+            if (r.ok) {
+              this.runtime_info = r.data
+              this.redraw()
+              
+              let idle_gpu_count = 0
+              for (let hostname in r.data)
+                for (let gpu_id in r.data[hostname])
+                  if (r.data[hostname][gpu_id].length == 0)
+                    idle_gpu_count++
+              bus.$emit('idle_gpu_count', idle_gpu_count)
+            } else {
+              bus.$emit('messagebox', r.reason, false)
+              console.log('[runtime] error: ' + r.reason)
+            }
+          })
+          .catch(err => console.log(err))
     }
   },
   beforeMount() {
@@ -85,6 +90,9 @@ export default {
     bus.$on('overquota_users', (val) => {
       this.overquota_users = val
       this.redraw()
+    })
+    bus.$on('refresh', () => {
+      this.refresh()
     })
   }
 }

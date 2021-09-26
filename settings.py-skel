@@ -4,17 +4,22 @@
 
 import os
 
-# 所有PATH相关变量的根目录
+
+# 所有PATH/FILE后缀变量的根目录
 # str, default: rootpath of sodayo
 BASE_PATH = os.path.dirname(os.path.abspath(__name__))
 
-# sodayo-web 编译产出的根相对路径, HTTP服务启动后会切换到该目录下运行
+# sodayo-web 编译产出的根相对路径, NOTE: HTTP服务启动后会切换到该目录下运行
 # str: default: 'web/dist'
 WEB_CHROOT_PATH = 'web/dist'
 
 # HTTP服务所在url位置
 # str, default: 'http://127.0.0.1:2333'
 API_BASE = 'http://127.0.0.1:2333'
+
+# 单次请求最多申请的GPU数量
+# int, default: 8
+MAX_ALLOC_COUNT = 8
 
 # HTTP服务所在socket位置
 # ('host/ip':str, port:int), default: ('127.0.0.1', 2333)

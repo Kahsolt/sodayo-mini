@@ -191,6 +191,7 @@ class QuotaTracker:
 
   def dump_task(self):
     # reset timer
+    self.dump_timer.cancel()
     self.dump_timer = Timer(min_to_sec(DUMP_INTERVAL), self.dump_task)
     self.dump_timer.start()
 
@@ -225,6 +226,7 @@ class GpuMonitor:
     logger.info('[check_task]')
 
     # reset timer
+    self.check_timer.cancel()
     self.check_timer = Timer(min_to_sec(CHECK_INTERVAL), self.check_task)
     self.check_timer.start()
 
@@ -272,13 +274,8 @@ class GpuMonitor:
   def alloc_gpu(self, username, password, gpu_count) -> Union[str, list]:
     logger.info('[alloc_gpu]')
 
-    # check quota of requester
-    quotas = self.quota.query()
-    if username in quotas and quotas[username] < 0:
-      return 'you have run out of quota'
-
     # try alloc current free
-    free_map = {hostname: [gpu_id for gpu_id, users in gpu_rt.items() if not len(users)]
+    free_map = {hostname: {gpu_id for gpu_id, users in gpu_rt.items() if not len(users)}
                 for hostname, gpu_rt in gpu_runtime.items()}
     hostnames = list(free_map.keys()); shuffle(hostnames)
     for hostname in hostnames:
@@ -290,6 +287,11 @@ class GpuMonitor:
         }
         return data
 
+    # check quota of requester
+    quotas = self.quota.query()
+    if username in quotas and quotas[username] < 0:
+      return 'you have run out of quota'
+    
     # try alloc with kill
     def all_killable(users):
       for user in users:
@@ -297,7 +299,7 @@ class GpuMonitor:
           return False
       return True
 
-    killable_map = {hostname: [gpu_id for gpu_id, users in gpu_rt.items() if all_killable(users)]
+    killable_map = {hostname: {gpu_id for gpu_id, users in gpu_rt.items() if all_killable(users)}
                     for hostname, gpu_rt in gpu_runtime.items()}
     hostnames = list(killable_map.keys()); shuffle(hostnames)
     for hostname in hostnames:
@@ -307,6 +309,7 @@ class GpuMonitor:
         to_kill_cnt = gpu_count - len(free_gpu_ids)
         to_kill_gpu_ids = sample(killable_gpu_ids, to_kill_cnt)
 
+        logger.info('[kill]')
         try:
           host, port = host_resolv[hostname]
           self.ssh.connect(hostname=host, port=port, username=username, password=password,
@@ -322,7 +325,10 @@ class GpuMonitor:
             if gpu_id not in to_kill_gpu_ids: continue
             for proc in gpu['processes']:
               pid = proc['pid']
-
+              username = proc['username']
+              cmd = proc['command']
+              
+              logger.info(f'  >> [{username}] {pid}: {cmd}')
               sh_cmd = f'kill -9 {pid}'
               stdin, stdout, stderr = self.ssh.exec_command(sh_cmd, timeout=15)
               r = stdout.read()
@@ -334,11 +340,12 @@ class GpuMonitor:
           return 'server internal error'
         finally:
           self.ssh.close()
-          
-        return {
+        
+        data = {
           'hostname': hostname,
           'gpu_ids': sorted(free_gpu_ids + to_kill_gpu_ids)
         }
+        return data
 
     return 'lack of resource'
 
@@ -350,6 +357,11 @@ class GpuMonitor:
 def root():
   try:    return render_template('index.html')
   except: return 'Web service not available :('
+
+@app.route('/refresh', methods=['PUT'])
+def refresh():
+  monitor.check_task()
+  return RESPONSE.ok({})
 
 @app.route('/runtime', methods=['GET'])
 def runtime():

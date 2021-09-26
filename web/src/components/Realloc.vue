@@ -6,6 +6,8 @@
         <div class="text-overline"> ReAlloc </div>
         <v-divider></v-divider>
 
+
+
         <v-card-subtitle class="text-center grey--text">
           <p v-if="idle_gpu_count <= 1">      currently <strong class="red--text">   {{ idle_gpu_count }}</strong> GPUs are free :) </p>
           <p v-else-if="idle_gpu_count <= 4"> currently <strong class="orange--text">{{ idle_gpu_count }}</strong> GPUs are free :) </p>
@@ -30,14 +32,13 @@
             <span class="text-center">
               {{ gpu_count }}
             </span>
-            <v-btn icon color="primary" @click="gpu_count < idle_gpu_count ? gpu_count++ : gpu_count">
+            <v-btn icon color="primary" @click="gpu_count < MAX_ALLOC_COUNT ? gpu_count++ : gpu_count">
               <v-icon>mdi-plus-circle</v-icon>
             </v-btn>
           </span>
 
           <span class="float-right mx-3">
-            <v-progress-circular v-if="is_busy" indeterminate color="error"></v-progress-circular>
-            <v-btn v-else @click="submit()" color="error"> Submit! </v-btn>
+            <v-btn color="error" :loading="is_submit" @click="submit()"> Submit! </v-btn>
           </span>
 
         </v-form>
@@ -50,13 +51,18 @@
 
 <script>
 import bus from '../plugins/bus'
+import hp from '../plugins/settings'
 
 export default {
   name: 'Realloc',
   props: { width: Number },
   data() {
     return {
-      is_busy: false,
+      MAX_ALLOC_COUNT: hp.MAX_ALLOC_COUNT,
+
+      loader: null,
+      is_submit: false,
+
       idle_gpu_count: -1,
       username: '',
       password: '',
@@ -65,12 +71,16 @@ export default {
   },
   methods: {
     submit() {
+      console.log('[Realloc.submit]')
+      this.loader = 'is_submit'
+
       let reqdata = {
         username: this.username,
         password: this.password,
         gpu_count: this.gpu_count,
       }
-      this.is_busy = true
+
+      bus.$emit('set_overlay', true)
       this.axios
           .post('/realloc', reqdata)
           .then(res => {
@@ -79,21 +89,34 @@ export default {
               let hostname = r.data.hostname
               let gpu_ids = r.data.gpu_ids
               let msg = '[' + hostname + ']: ' + gpu_ids.toString()
-              alert(msg); console.log(msg)
+
+              bus.$emit('messagebox', msg, true)
+              console.log('[realloc] ok: ' + msg)
+
+              bus.$emit('refresh')
             } else {
-              let msg = '[realloc] error: ' + r.reason
-              alert(msg); console.log(msg)
-              this.refresh()
+              bus.$emit('messagebox', r.reason, false)
+              console.log('[realloc] error: ' + r.reason)
             }
           })
           .catch(err => console.log(err))
-      this.is_busy = false
+          .finally(() => {
+            bus.$emit('set_overlay', false)
+          })
     },
   },
   beforeMount() {
       bus.$on('idle_gpu_count', (val) => {
         this.idle_gpu_count = val;
       })
+  },
+  watch: {
+    loader () {
+      const l = this.loader
+      this[l] = !this[l]
+      setTimeout(() => (this[l] = false), 5000)
+      this.loader = null
+    },
   },
 }
 </script>
