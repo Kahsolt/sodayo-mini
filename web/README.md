@@ -14,6 +14,7 @@
 
   - vue & vuetify
   - axios
+  - js-base64
 
 ----
 by Armit

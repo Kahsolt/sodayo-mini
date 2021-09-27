@@ -10,6 +10,7 @@ from shutil import copy
 from time import time
 from threading import Timer, RLock
 from datetime import datetime
+from base64 import b64decode
 from random import sample, shuffle
 from collections import defaultdict, deque
 from typing import DefaultDict, Union, Tuple
@@ -229,8 +230,8 @@ class SshPool:
     ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     return ssh
   
-  @with_lock(lock)
   @staticmethod
+  @with_lock(lock)
   def test_login(sock, username, password) -> bool:
     logger.info('[SshPool.test_login]')
 
@@ -374,11 +375,10 @@ class GpuMonitor:
     for hostname in hostnames:
       free_gpu_ids = list(free_map[hostname])
       if len(free_gpu_ids) >= gpu_count:
-        data = {
+        return {
           'hostname': hostname,
           'gpu_ids': sorted(sample(free_gpu_ids, gpu_count))
         }
-        return data
 
     # check quota of requester
     quotas = self.quota_tracker.query()
@@ -430,12 +430,13 @@ class GpuMonitor:
           logger.error(format_exc())
           return f'server internal error: {e}'
         
+        # instantly make a sync
+        Timer(0, self.sync).start()
         # tell client
-        data = {
+        return {
           'hostname': hostname,
           'gpu_ids': sorted(free_gpu_ids + to_kill_gpu_ids)
         }
-        return data
 
     return 'lack of resource'
 
@@ -474,8 +475,8 @@ def quota():
 def realloc():
   try:
     data = request.json
-    username = data.get('username')
-    password = data.get('password')
+    username = b64decode(data.get('username').encode()).decode()
+    password = b64decode(data.get('password').encode()).decode()
     gpu_count = int(data.get('gpu_count'))
     assert None not in [username, password, gpu_count]
   except:

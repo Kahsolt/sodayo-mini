@@ -21,8 +21,8 @@
 </template>
 
 <script>
-import bus from '../plugins/bus'
 import hp from '../plugins/settings'
+import bus from '../plugins/bus'
 
 export default {
   name: 'Runtime',
@@ -85,9 +85,7 @@ export default {
     this.refresh()
     setInterval(this.refresh, 1000 * hp.REFRESH_INTERVAL)
 
-    bus.$on('refresh', () => {
-      this.refresh()
-    })
+    bus.$on('refresh', () => this.refresh())
   }
 }
 </script>

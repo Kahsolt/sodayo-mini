@@ -50,8 +50,9 @@
 </template>
 
 <script>
-import bus from '../plugins/bus'
+import { encode } from 'js-base64'
 import hp from '../plugins/settings'
+import bus from '../plugins/bus'
 
 export default {
   name: 'Realloc',
@@ -75,8 +76,8 @@ export default {
       this.loader = 'is_submit'
 
       let reqdata = {
-        username: this.username,
-        password: this.password,
+        username: encode(this.username),
+        password: encode(this.password),
         gpu_count: this.gpu_count,
       }
 
@@ -93,22 +94,18 @@ export default {
               bus.$emit('messagebox', msg, true)
               console.log('[realloc] ok: ' + msg)
 
-              bus.$emit('refresh')
+              setTimeout(() => bus.$emit('refresh'), 3000)
             } else {
               bus.$emit('messagebox', r.reason, false)
               console.log('[realloc] error: ' + r.reason)
             }
           })
           .catch(err => console.log(err))
-          .finally(() => {
-            bus.$emit('set_overlay', false)
-          })
+          .finally(() => bus.$emit('set_overlay', false))
     },
   },
   beforeMount() {
-      bus.$on('idle_gpu_count', (val) => {
-        this.idle_gpu_count = val;
-      })
+    bus.$on('idle_gpu_count', (val) => (this.idle_gpu_count = val))
   },
   watch: {
     loader () {
