@@ -79,8 +79,9 @@ def quota():
     else:
       if username in quotas: return RESPONSE.ok({username: quotas[username]})
       else: return RESPONSE.fail(f'username {username!r} not found')
-  except:
-    return RESPONSE.fail('server internal error')
+  except Exception as e:
+    print(format_exc())
+    return RESPONSE.fail(f'server internal error: {e}')
 
 @app.route('/realloc', methods=['POST'])
 def realloc():
@@ -100,9 +101,9 @@ def realloc():
     elif x < 0.3: r = 'resource not available'
     else:         r = {'hostname': f'server{randrange(5)}', 'gpu_ids': sorted(sample(list(range(8)), gpu_count))}
     return type(r) == str and RESPONSE.fail(r) or RESPONSE.ok(r)
-  except:
+  except Exception as e:
     print(format_exc())
-    return RESPONSE.fail('server internal error')
+    return RESPONSE.fail(f'server internal error: {e}')
 
 
 ##############################################################################

@@ -7,16 +7,17 @@ const settings = {
   NETWORK_TIMEOUT: 15,
 
   // auto refresh data (in seconds)
-  // REFER: sodayo `setting.SYNC_DEADTIME`
-  SYNC_DEADTIME: 10,
+  // REFER: sodayo `setting.FORCE_SYNC_DEADTIME`
+  FORCE_SYNC_DEADTIME: 10,
+
+  // auto refresh data (in seconds)
+  // REFER: sodayo `setting.AUTO_SYNC_INTERVAL`
+  REFRESH_INTERVAL: 60 * 10,
 
   // max alloc gpu count at once
   // REFER: sodayo `setting.MAX_REALLOC_COUNT`
   MAX_REALLOC_COUNT: 8,
 
-  // auto refresh data (in seconds)
-  // REFER: sodayo `setting.SYNC_INTERVAL`
-  REFRESH_INTERVAL: 60 * 10,
 }
 
 export default settings

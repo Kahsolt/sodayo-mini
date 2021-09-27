@@ -5,51 +5,44 @@
 import os
 import logging
 from re import compile as Regex
-from shutil import copy2
-from threading import Timer, RLock
-from time import time
 from json import loads
+from shutil import copy
+from time import time
+from threading import Timer, RLock
 from datetime import datetime
 from random import sample, shuffle
-from collections import defaultdict
-from typing import DefaultDict, Union
+from collections import defaultdict, deque
+from typing import DefaultDict, Union, Tuple
 from traceback import format_exc
 from pwd import getpwuid
 
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import paramiko
-from paramiko.ssh_exception import AuthenticationException
+from paramiko.client import SSHClient
+from paramiko.ssh_exception import AuthenticationException, SSHException
 
 from settings import *
 
 
-__version__ = '0.1'     # 2021/09/26
+__version__ = '0.1'     # 2021/09/27
 
 
-# NOTE: main functional code lies in `GpuMonitor.dequota_task()` and `GpuMonitor.alloc_gpu()`
+# NOTE: main functional code lies in `sync()` and `alloc_gpu()` of `GpuMonitor`
 
 ##############################################################################
 # globals
 
-os.chdir(WEB_CHROOT_PATH)
+os.chdir(WEB_CHROOT_PATH)   # NOTE: chroot before `app` define
 app = Flask(__name__, template_folder='', static_folder='')
-#app.after_request(after_request)
 CORS(app, support_credential=True, resources={r'/*': {'origins': '*'}})
 
-#def after_request(resp):
-#  resp.headers['Access-Control-Allow-Origin'] = request.headers.get('Origin') or '*'
-#  resp.headers['Access-Control-Allow-Methods'] = 'GET,POST,'
-#  resp.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization,Accept,Origin,Referer,User-Agent'
-#  resp.headers['Access-Control-Allow-Credentials'] = 'true'
-#  return resp
-
-host_resolv = { }           # {'hostname': sock(hist:str, port:int)}, for ssh and kill
-gpu_runtime = defaultdict(lambda:defaultdict(set))    # {'hostname': {0: {usernames}}}
+host_resolv = { }           # {'hostname': sock(hist:str, port:int)}, for ssh to kill
+gpu_runtime = defaultdict(lambda:defaultdict(set))    # {'hostname': {0: {'username'}}}
 
 logger = None
 monitor = None
-lock = RLock()              # for use `ssh` client
+lock = RLock()              # global lock, may be useful in cases ...
 
 
 ##############################################################################
@@ -61,7 +54,7 @@ def init_logger():
   logger = logging.getLogger(__name__)
   logger.setLevel(level=logging.DEBUG)
 
-  log = paramiko.util.get_logger("paramiko")
+  log = paramiko.util.get_logger("paramiko")    # NOTE: suppress detailed paramiko logs
   log.setLevel(logging.CRITICAL)
 
   if LOG_FILE:
@@ -85,11 +78,25 @@ class RESPONSE:
     return jsonify(r)
 
   ok = lambda data=None: RESPONSE.make(ok=True, data=data)
-  fail = lambda reason='': RESPONSE.make(ok=False, reason=reason)
+  fail = lambda reason=None: RESPONSE.make(ok=False, reason=reason)
 
-min_to_sec = lambda x: x * 60
-
+min_to_sec  = lambda x: x * 60
+min_to_hour = lambda x: x / 60
 now_ts = lambda: datetime.timestamp(datetime.now())
+
+sock_to_hostport = lambda sock: f'{sock[0]}:{sock[1]}'
+
+def to_serializable(data):
+  if data is None:
+    return None
+  elif type(data) in [int, float, str]:
+    return data
+  elif type(data) in [list, tuple, set, deque]:
+    return [to_serializable(v) for v in data]
+  elif type(data) in [dict, defaultdict]:
+    return {to_serializable(k): to_serializable(v) for k, v in data.items()}
+  else:
+    return repr(data)
 
 
 ##############################################################################
@@ -125,7 +132,7 @@ class QuotaTracker:
 
   WHITESPACE_REGEX = Regex(r'\s+')
 
-  quota_info = { }    # 'username': time(int)
+  quota_info = { }    # 'username': time_remnants(float)
   
   def _get_fp(self) -> str:
     return os.path.join(BASE_PATH, DATA_PATH, f'quota_{datetime.now().strftime("%Y-%m")}.txt')
@@ -162,6 +169,7 @@ class QuotaTracker:
       for username, quota in self.quota_info.items():
         fh.write(f'{username} {quota:.4f}\n')
   
+  @with_lock(lock)
   def rotate(self):
     logger.info('[rotate]')
 
@@ -173,23 +181,22 @@ class QuotaTracker:
     # absence indicates a new month beginning, let's make a new copy from `quota_init`
     if not os.path.exists(self.current_fp):
       os.makedirs(os.path.join(BASE_PATH, DATA_PATH), exist_ok=True)
-      copy2(os.path.join(BASE_PATH, QUOTA_INIT_FILE), self.current_fp)
-    
+      copy(os.path.join(BASE_PATH, QUOTA_INIT_FILE), self.current_fp)
+      
     # load `quota_info` from file
     self.load()
 
   @check_rotate
-  def dequota(self, username:str, time:int):
+  def dequota(self, username:str, time_in_hour:float):
     if username in self.quota_info:
-      h = time / 60     # NOTE: time is in minutes
-      logger.info(f'  >> user {username!r} of {h:.4f} hour(s)')
-      self.quota_info[username] -= h
+      logger.info(f'  >> user {username!r} of {time_in_hour:.4f} hour(s)')
+      self.quota_info[username] -= time_in_hour
     else:
       logger.warning(f'  << user {username!r} is beyond track, ignored')
 
   @check_rotate
   def query(self) -> dict:
-    return self.quota_info
+    return self.quota_info        # NOTE: use `.copy()` if security signifies
 
   def dump_task(self):
     # reset timer
@@ -199,98 +206,169 @@ class QuotaTracker:
     # do work
     self.dump()
 
+class SshPool:
+
+  SYSTEM_USERNAME = getpwuid(os.getuid()).pw_name
+  SYSTEM_PKEY = paramiko.RSAKey.from_private_key_file(os.path.join(os.path.expanduser('~'), '.ssh/id_rsa'))
+
+  def __init__(self):
+    self.pool = { }         # { sock(str,int): SSHClient }
+    self.pool_rev = { }
+  
+  def destroy(self):
+    for ssh in self.pool.values():
+      ssh.close()
+    self.pool.clear()
+    self.pool_rev.clear()
+
+  @staticmethod
+  def new() -> SSHClient:
+    logger.info('[SshPool.new]')
+
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    return ssh
+  
+  @with_lock(lock)
+  @staticmethod
+  def test_login(sock, username, password) -> bool:
+    logger.info('[SshPool.test_login]')
+
+    try:
+      host, port = sock
+      ssh = SshPool.new()
+      ssh.connect(hostname=host, port=port, username=username, password=password,
+                  banner_timeout=SSH_TIMEOUT)
+    except AuthenticationException:
+      return False
+    except:
+      logger.error(format_exc())
+      return None
+    else:
+      return True
+    finally:
+      ssh.close()
+
+  def get(self, sock:Tuple[str, int]) -> SSHClient:
+    if sock not in self.pool:
+      host, port = sock
+      try:
+        ssh = SshPool.new()
+        ssh.connect(hostname=host, port=port, username=self.SYSTEM_USERNAME, pkey=self.SYSTEM_PKEY,
+                    banner_timeout=SSH_TIMEOUT)
+        sh_cmd = 'hostname'   # just for a test
+        stdin, stdout, stderr = ssh.exec_command(sh_cmd, timeout=SSH_TIMEOUT)
+        _ = stdout.read().strip()
+      except:
+        pass
+      else:
+        self.pool[sock] = ssh
+        self.pool_rev[ssh] = sock
+
+    return self.pool.get(sock)
+
+  def mark_broken(self, ssh:SSHClient):
+    logger.info('[SshPool.mark_broken]')
+
+    if ssh in self.pool_rev:
+      ssh.close()
+      self.pool.pop(self.pool_rev[ssh])
+      self.pool_rev.pop(ssh)
+
 class GpuMonitor:
 
   def __init__(self):
-    # quota tracker
-    self.quota = QuotaTracker()
+    # workers
+    self.quota_tracker = QuotaTracker()
+    self.ssh_pool      = SshPool()
+    self.check_timer   = Timer(1, self.dequota_task)
 
-    # last sync timestamp
+    # limit `.sync()` call frequency
     self.last_sync_ts = now_ts()
 
-    # ssh configs
-    self.ssh = paramiko.SSHClient()
-    self.ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-    self.username = getpwuid(os.getuid()).pw_name
-    self.pkey = paramiko.RSAKey.from_private_key_file(os.path.join(os.path.expanduser('~'), '.ssh/id_rsa'))
-
-    self.check_timer = Timer(0, self.dequota_task)
-
   def start(self):
-    self.quota.start()
+    self.quota_tracker.start()
     self.check_timer.start()
 
   def stop(self):
     self.check_timer.cancel()
-    self.quota.stop()
+    self.ssh_pool.destroy()
+    self.quota_tracker.stop()
+
+  def query_quota(self, username=None) -> dict:
+    r = self.quota_tracker.query()
+    if username:
+      if username in r: return {username: r[username]}
+      else: return None
+    else:
+      return r
+
+  @perf_counter
+  def try_sync(self) -> bool:
+    if now_ts() - self.last_sync_ts < FORCE_SYNC_DEADTIME:
+      return False
+
+    self.sync()
+    self.last_sync_ts = now_ts()
+    return True
 
   @with_lock(lock)
-  def sync(self, collect_quota=False) -> Union[DefaultDict, bool]:
-    now_ts_freeze = now_ts()
-    if not collect_quota and (now_ts_freeze - self.last_sync_ts <= SYNC_DEADTIME): return False
-    self.last_sync_ts = now_ts_freeze
-
-    if collect_quota:
-      quota_portion = defaultdict(int)     # {'username': portion(int)}
-    for host, port in TRACKED_SOCKETS:      # foreach host
-      logger.info(f'  >> query ({host}, {port})')
+  def sync(self) -> DefaultDict:
+    quota_portion = defaultdict(int)     # {'username': portion(int)}
+    for sock in TRACKED_SOCKETS:         # foreach host
+      logger.info(f'  >> query {sock_to_hostport(sock)}')
 
       try:
-        self.ssh.connect(hostname=host, port=port, username=self.username, pkey=self.pkey,
-                         timeout=10, banner_timeout=10, auth_timeout=10)
-
+        ssh = self.ssh_pool.get(sock)
+  
         # NOTE: dict key 'queyr_time' should be removed, cos' type `datetime` is not JSON serializable
-        # but `del['queyr_time']` does NOT work due to some `eval()` function closure issue, so we keep this `pop()[1]` magic :)
+        # but `del['queyr_time']` does NOT work due to some `eval()` function closure issues, so we keep this `pop()[1]` magic :)
         py_cmd = 'import gpustat, json; r = gpustat.new_query().jsonify(); r.pop(list(r.keys())[1]); print(json.dumps(r))'
         sh_cmd = f'python -c "{py_cmd}"'
-        stdin, stdout, stderr = self.ssh.exec_command(sh_cmd, timeout=15)
+        stdin, stdout, stderr = ssh.exec_command(sh_cmd, timeout=SSH_TIMEOUT)
         res = loads(stdout.read().strip())
 
         hostname = res['hostname']
         if hostname not in host_resolv:
-          host_resolv[hostname] = (host, port)
+          host_resolv[hostname] = sock
 
         gpu_rt = gpu_runtime[hostname]    # {0: {username}}
         for gpu in res['gpus']:           # foreach GPU
           gpu_id, procs = gpu['index'], gpu['processes']
-          gpu_rt[gpu_id] = {p['username'] for p in procs}
+          gpu_rt[gpu_id] = {p['username'] for p in procs}     # dedup users on a single card
 
-          if collect_quota:
-            for username in gpu_rt[gpu_id]:
-              if username == 'root': continue
-              quota_portion[username] += 1
+          for username in gpu_rt[gpu_id]:
+            quota_portion[username] += 1
 
+      except SSHException:
+        self.ssh_pool.mark_broken(ssh)
       except Exception as e:
-        logger.error(f'  << failed for ({host}, {port})')
-        logger.debug(e)
-      finally:
-        self.ssh.close()
+        logger.error(f'  << failed for {sock_to_hostport(sock)}')
 
-    if collect_quota: return quota_portion
-    else: return True
+    return quota_portion
 
-  @perf_counter       # ~ 6s
+  @perf_counter
   def dequota_task(self):
     logger.info('[dequota_task]')
 
     # reset timer
-    self.check_timer = Timer(min_to_sec(SYNC_INTERVAL), self.dequota_task)
+    self.check_timer = Timer(min_to_sec(AUTO_SYNC_INTERVAL), self.dequota_task)
     self.check_timer.start()
 
     # do work
-    quota_portion = self.sync(collect_quota=True)
+    quota_portion = self.sync()
     if quota_portion:
       # NOTE: we move this log out of `QuotaTracker.dequota` for pretty printing :)
       logger.info('[dequota]')
       for username, portion in quota_portion.items():
-        self.quota.dequota(username, SYNC_INTERVAL * portion)
+        self.quota_tracker.dequota(username, min_to_hour(AUTO_SYNC_INTERVAL * portion))
 
-  @with_lock(lock)
   def alloc_gpu(self, username, password, gpu_count) -> Union[str, list]:
     logger.info('[alloc_gpu]')
 
     # try alloc current free
-    free_map = {hostname: {gpu_id for gpu_id, users in gpu_rt.items() if not len(users)}
+    free_map = {hostname: {gpu_id for gpu_id, users in gpu_rt.items() 
+                                  if not len(users)}
                 for hostname, gpu_rt in gpu_runtime.items()}
     hostnames = list(free_map.keys()); shuffle(hostnames)
     for hostname in hostnames:
@@ -303,36 +381,38 @@ class GpuMonitor:
         return data
 
     # check quota of requester
-    quotas = self.quota.query()
+    quotas = self.quota_tracker.query()
     if username in quotas and quotas[username] < 0:
       return 'you have run out of quota'
-    
-    # try alloc with kill
-    def all_killable(users):
-      for user in users:
-        if user in quotas and quotas[user] > 0:
-          return False
-      return True
 
-    killable_map = {hostname: {gpu_id for gpu_id, users in gpu_rt.items() if all_killable(users)}
+    # try alloc with kill
+    all_killable = lambda users: not [True for user in users if user in quotas and quotas[user] > 0]
+    killable_map = {hostname: {gpu_id for gpu_id, users in gpu_rt.items()
+                                      if (gpu_id not in free_map[hostname]) and all_killable(users)}
                     for hostname, gpu_rt in gpu_runtime.items()}
     hostnames = list(killable_map.keys()); shuffle(hostnames)
     for hostname in hostnames:
-      if len(killable_map[hostname]) >= gpu_count:
-        free_gpu_ids = list(free_map[hostname])
-        killable_gpu_ids = list(killable_map[hostname] - free_map[hostname])
-        to_kill_cnt = gpu_count - len(free_gpu_ids)
-        to_kill_gpu_ids = sample(killable_gpu_ids, to_kill_cnt)
+      if len(free_map[hostname]) + len(killable_map[hostname]) >= gpu_count:
+        sock = host_resolv[hostname]
 
+        # check authentication
+        r = SshPool.test_login(sock, username, password)
+        if r is False:  return 'linux auth failed, wrong username/password'
+        elif r is None: return 'server internal error: ssh connect failed'
+
+        # decide which to sacrifice with randomness
+        free_gpu_ids      = list(free_map[hostname])
+        killable_gpu_ids  = list(killable_map[hostname])
+        to_kill_cnt       = gpu_count - len(free_gpu_ids)
+        to_kill_gpu_ids   = sample(killable_gpu_ids, to_kill_cnt)
+
+        # gogogo!
         logger.info('[kill]')
         try:
-          host, port = host_resolv[hostname]
-          self.ssh.connect(hostname=host, port=port, username=username, password=password,
-                           timeout=10, banner_timeout=10, auth_timeout=10)
-
+          ssh = self.ssh_pool.get(sock)
           py_cmd = 'import gpustat, json; r = gpustat.new_query().jsonify(); r.pop(list(r.keys())[1]); print(json.dumps(r))'
           sh_cmd = f'python -c "{py_cmd}"'
-          stdin, stdout, stderr = self.ssh.exec_command(sh_cmd, timeout=15)
+          stdin, stdout, stderr = ssh.exec_command(sh_cmd, timeout=SSH_TIMEOUT)
           res = loads(stdout.read().strip())
 
           for gpu in res['gpus']:           # foreach GPU
@@ -343,17 +423,14 @@ class GpuMonitor:
               logger.info(f'  >> [{proc["username"]}] {pid}: {proc["command"]}')
 
               sh_cmd = f'kill -9 {pid}'
-              stdin, stdout, stderr = self.ssh.exec_command(sh_cmd, timeout=15)
-              r = stdout.read()
+              stdin, stdout, stderr = ssh.exec_command(sh_cmd, timeout=SSH_TIMEOUT)
+              _ = stdout.read()              # may us assert _ is ''
 
-        except AuthenticationException:
-          return 'linux auth failed, wrong username/password'
-        except:
+        except Exception as e:
           logger.error(format_exc())
-          return 'server internal error'
-        finally:
-          self.ssh.close()
+          return f'server internal error: {e}'
         
+        # tell client
         data = {
           'hostname': hostname,
           'gpu_ids': sorted(free_gpu_ids + to_kill_gpu_ids)
@@ -364,7 +441,7 @@ class GpuMonitor:
 
 
 ##############################################################################
-# HTTP routes (jsonstr in, jsonstr out)
+# HTTP routes
 
 @app.route('/', methods=['GET'])
 def root():
@@ -373,27 +450,25 @@ def root():
 
 @app.route('/sync', methods=['PUT'])
 def sync():
-  r = monitor.sync()
+  r = monitor.try_sync()
   return r and RESPONSE.ok() or RESPONSE.fail('server busy, retry later')
 
 @app.route('/runtime', methods=['GET'])
 def runtime():
-  d = {k: {i: list(u) for i, u in v.items()} for k, v in gpu_runtime.items()}
-  return RESPONSE.ok(d)
+  r = to_serializable(gpu_runtime)
+  return RESPONSE.ok(r)
 
 @app.route('/quota', methods=['GET'])
 def quota():
   username = request.args.get('username')
 
   try:
-    quotas = monitor.quota.query()
-    if not username: return RESPONSE.ok(quotas)
-    else:
-      if username in quotas: return RESPONSE.ok({username: quotas[username]})
-      else: return RESPONSE.fail(f'username {username!r} not found')
-  except:
+    r = monitor.query_quota(username)
+    if r: return RESPONSE.ok(r)
+    else: return RESPONSE.fail(f'username {username!r} not found')
+  except Exception as e:
     logger.error(format_exc())
-    return RESPONSE.fail('server internal error')
+    return RESPONSE.fail(f'server internal error: {e}')
 
 @app.route('/realloc', methods=['POST'])
 def realloc():
@@ -404,14 +479,15 @@ def realloc():
     gpu_count = int(data.get('gpu_count'))
     assert None not in [username, password, gpu_count]
   except:
+    logger.error(f'postdata: {data}')
     return RESPONSE.fail('parameter wrong')
   
   try: 
     r = monitor.alloc_gpu(username, password, gpu_count)
     return type(r) == str and RESPONSE.fail(r) or RESPONSE.ok(r)
-  except:
+  except Exception as e:
     logger.error(format_exc())
-    return RESPONSE.fail('server internal error')
+    return RESPONSE.fail(f'server internal error: {e}')
 
 
 ##############################################################################

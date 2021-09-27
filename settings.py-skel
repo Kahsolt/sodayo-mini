@@ -25,7 +25,7 @@ API_BASE = 'http://127.0.0.1:2333'
 
 # 客户端主动要求sync的最短时间间隔，NOTE: 防止API滥用
 # int (in seconds), default: 10
-SYNC_DEADTIME = 10
+FORCE_SYNC_DEADTIME = 10
 
 # 单次请求最多申请的GPU数量
 # int, default: 8
@@ -35,9 +35,13 @@ MAX_REALLOC_COUNT = 8
 # str: default: 'web/dist'
 WEB_CHROOT_PATH = 'web/dist'
 
+# SSH连接和命令执行的超时时间
+# int (in seconds), default: 10
+SSH_TIMEOUT = 10
+
 # 服务端定时自动遍历检查所有主机的时间间隔，也是dequota的自然周期
 # int (in minutes), default: 10
-SYNC_INTERVAL = 10
+AUTO_SYNC_INTERVAL = 10
 
 # 强制保存一次 quota历史记录 的时间间隔
 # int (in minutes), default: 60

@@ -120,7 +120,7 @@ export default {
     loader () {
       const l = this.loader
       this[l] = !this[l]
-      setTimeout(() => (this[l] = false), 1000 * hp.SYNC_DEADTIME)
+      setTimeout(() => (this[l] = false), 1000 * hp.FORCE_SYNC_DEADTIME)
       this.loader = null
     },
   },
