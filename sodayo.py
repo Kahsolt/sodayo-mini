@@ -214,13 +214,11 @@ class SshPool:
 
   def __init__(self):
     self.pool = { }         # { sock(str,int): SSHClient }
-    self.pool_rev = { }
   
   def destroy(self):
     for ssh in self.pool.values():
       ssh.close()
     self.pool.clear()
-    self.pool_rev.clear()
 
   @staticmethod
   def new() -> SSHClient:
@@ -264,17 +262,17 @@ class SshPool:
         pass
       else:
         self.pool[sock] = ssh
-        self.pool_rev[ssh] = sock
 
     return self.pool.get(sock)
 
   def mark_broken(self, ssh:SSHClient):
     logger.info('[SshPool.mark_broken]')
 
-    if ssh in self.pool_rev:
-      ssh.close()
-      self.pool.pop(self.pool_rev[ssh])
-      self.pool_rev.pop(ssh)
+    for k, v in self.pool.items():
+      if ssh == v:
+        ssh.close()
+        self.pool.pop(k)
+        break
 
 class GpuMonitor:
 
@@ -341,9 +339,12 @@ class GpuMonitor:
           for username in gpu_rt[gpu_id]:
             quota_portion[username] += 1
 
-      except SSHException:
+      except Exception:
+        for k, v in host_resolv.items():    # temporarily forget it
+          if v == sock and k in gpu_runtime:
+            gpu_runtime.pop(k)
+            break
         self.ssh_pool.mark_broken(ssh)
-      except Exception as e:
         logger.error(f'  << failed for {sock_to_hostport(sock)}')
 
     return quota_portion
